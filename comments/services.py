@@ -1,11 +1,29 @@
 from django.db import transaction
 from django.db.models import F
+from django.shortcuts import get_object_or_404
 
 from .models import Comment, CommentVote, CommentBookmark
 
 
-def get_comment(*, user, comment_id):
-    return Comment.objects.filter(user=user, id=comment_id).first()
+def get_all_comments():
+    return Comment.objects.all()
+
+
+def get_user_comments(*, user):
+    return (
+        Comment.objects
+        .filter(user=user, parent=None)
+        .select_related("user", "parent")
+        .prefetch_related("replies", "replies__replies")
+    )
+
+
+def get_comment_by_id(comment_id):
+    return get_object_or_404(
+        Comment.objects.prefetch_related("replies"),
+        id=comment_id
+    )
+
 
 def add_comment(*, user, text, parent=None):
     return Comment.objects.create(
@@ -13,6 +31,20 @@ def add_comment(*, user, text, parent=None):
         text=text,
         parent=parent
     )
+
+
+def reply_to_comment(*, comment_id):
+    comment = Comment.objects.select_for_update().get(pk=comment_id)
+
+    if not comment:
+        return False
+
+    else:
+        comment.parent = Comment.objects.create(user=comment.parent, text=comment.text)
+        comment.save(update_fields=["parent"])
+
+    return True
+
 
 def update_comment(*, user, comment, text):
     if comment.user != user:
@@ -22,12 +54,14 @@ def update_comment(*, user, comment, text):
     comment.save(update_fields=["text", "updated_at"])
     return comment
 
+
 def delete_comment(*, user, comment):
     if comment.user != user:
         return False
 
     comment.delete()
     return True
+
 
 @transaction.atomic
 def set_comment_vote(*, user, comment, value):
@@ -78,9 +112,13 @@ def set_comment_vote(*, user, comment, value):
     existing_vote.value = value
     existing_vote.save(update_fields=["value"])
 
+
 @transaction.atomic
 def toggle_comment_bookmark(*, user, comment):
-    existing_bookmark = CommentBookmark.objects.filter(user=user, comment=comment).first()
+    existing_bookmark = CommentBookmark.objects.filter(
+        user=user,
+        comment=comment
+    ).first()
 
     if existing_bookmark:
         existing_bookmark.delete()
